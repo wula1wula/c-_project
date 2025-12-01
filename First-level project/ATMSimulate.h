@@ -4,4 +4,6 @@
 
 void ATMSimulate(void);
 
+void saveFile();
+
 #endif

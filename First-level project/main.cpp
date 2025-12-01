@@ -14,6 +14,8 @@ int main(void) {
 	//ScientificCalculator();
 	//ManagementSystem();
 	//studentSystem();
-	ATMSimulate();
-	return 0;
+	//ATMSimulate();
+      ATMSimulate();
+
+    return 0;
 }

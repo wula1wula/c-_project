@@ -42,24 +42,34 @@
 #include<fstream>
 #include<nlohmann/json.hpp>
 #include <memory>
+#include<map>
+#include<utility>
+#include <limits>
+#define NOMINMAX
+#include <windows.h>
 
+//声明Account类
+class Account;
+
+std::map<std::string, std::unique_ptr<Account>> accountMap;
 class Account {
 protected:
 	std::string ID;
 	std::string password;
 	double balance;
-	std::vector<std::string> history;
 public:
+	std::vector<std::string> history;
 	Account(std::string id, std::string pwd, double bal =0.0)
 		: ID(id), password(pwd), balance(bal) {}
 	virtual ~Account() {}
 	std::string getId() const { return ID; }
 	std::string getPsw() const { return password; }
 	double getBalance() const { return balance; }
-	std::vector<std::string> getHistory() const { return history; }	//存款
+	std::vector<std::string> getHistory() const { return history; }	
+	//存款
 	virtual bool deposit(double amount){
 		if (amount <= 0) {
-			throw std::invalid_argument("金额无效");
+			return false;
 		}
 		balance += amount;
 		addHistory("存款" + std::to_string(amount));
@@ -67,9 +77,8 @@ public:
 	}
 	//取款
 	virtual bool withdraw(double amount) {
-		if (amount <= 0) {
-			throw std::invalid_argument("金额无效");
-		}
+		if (amount <= 0) return false;
+		if (balance < amount) return false;
 		balance -= amount;
 		addHistory("取款" + std::to_string(amount));
 		return true;
@@ -79,27 +88,59 @@ public:
 		std::cout << "余额：" << balance << std::endl;;
 	}
 	//转账
-	bool transfer() {
-		//TODO
+	bool transfer(const std::string& id,double amount) {
+		if (amount <= 0) return false;
+		auto it = accountMap.find(id);
+		if (it == accountMap.end()) return false;
+		if (balance < amount) return false;
+		balance -= amount;
+		bool depSuccess = it->second->deposit(amount);
+		if (!depSuccess) {
+			balance += amount;
+			return false;
+		}
+		addHistory("转账" + std::to_string(amount) + "到账户" + id);
+		it->second->addHistory("收到转账" + std::to_string(amount) + "来自账户" + ID);
 		return true;
 	}
 	//查看交易历史
 	void viewHistory() {
-		std::cout << "所有交易记录：" << std::endl;
-		for (int i = 0; i < history.size(); i++) {
-			std::cout << history[i] <<"\n"<< std::endl;
+		std::cout << "最近5笔交易记录：" << std::endl;
+		size_t start = history.size() >= 5 ? history.size() - 5 : 0;
+		for (size_t i = start; i < history.size();++i) {
+			std::cout << history[i] << std::endl;
+		}
+		if (history.empty()) {
+			std::cout << "无交易记录。" << std::endl;
 		}
 	}
 	//添加交易历史记录
 	void addHistory(std::string mes){
-		history.push_back(getTimeStamp() + " :" + mes);
+		try {
+			history.push_back(getTimeStamp() + " :" + mes);
+		}
+		catch (const std::invalid_argument& e) {
+			std::cout << e.what() << std::endl;
+		}
+		catch (...) {
+			std::cout << "添加交易记录失败，未知错误！" << std::endl;
+		}
 	}
 	//获取当前时间戳
 	std::string getTimeStamp() {
-		std::time_t now = std::time(nullptr);
-		std::tm* ltm = std::localtime(&now);
+		std::time_t now = std::time(nullptr);  // 获取当前时间戳
+		if (now == -1) {  // time() 失败检查
+			throw std::invalid_argument("时间获取失败");  // 或抛出异常
+		}
+
+		std::tm timeinfo;  // 预声明 tm 缓冲区
+		errno_t err = localtime_s(&timeinfo, &now);  // 安全转换
+		if (err != 0) {  // 检查错误
+			throw std::invalid_argument("时间转换失败"); // 或 std::perror("localtime_s failed");
+		}
+
 		std::stringstream ss;
-		ss << std::put_time(ltm, "%Y-%m-%d");
+		ss << std::put_time(&timeinfo, "%Y-%m-%d");  // 格式化：YYYY-MM-DD
 		return ss.str();
 	}
 	//账户类型
@@ -112,14 +153,16 @@ class SavingsAccount : public Account {
 private:
 	double interestRate = 0.05;
 public:
-	SavingsAccount(std::string id,std::string password,double bal =0.0):Account(id,password,bal){}
+	SavingsAccount(std::string id, std::string password, double bal = 0.0) :Account(id, password, bal) {}
 	bool deposit(double amount) override {
-		Account::deposit(amount);
+		if (!Account::deposit(amount)) return false;  // 修改：调用基类（检查+历史）
 		balance *= (1 + interestRate);
-		addHistory("存款：" + std::to_string(balance) + "(加息后)");
+		if (!history.empty()) {
+			history.back() += " (加息后余额: " + std::to_string(balance) + ")";  // 修改：附加到存款记录
+		}
 		return true;
 	}
-	std::string getType() override{
+	std::string getType() override {
 		return "SavingsAccount";
 	}
 };
@@ -129,23 +172,35 @@ public:
 	CheckingAccount(std::string id, std::string password, double bal = 0.0) :Account(id, password, bal) {}
 	bool withdraw(double amount) override {
 		if (balance - amount < 100) {
-			throw std::invalid_argument("余额不得低于100");
+			return false;
 		}
-		else {
-			return Account::withdraw(amount);
-		}
+		return Account::withdraw(amount);
 	}
 	std::string getType() override {
 		return "CheckingAccount";
 	}
 };
-
+// 辅助函数：UTF-8 to GBK 转换
+std::string UTF8ToGBK(const std::string& utf8Str) {
+	if (utf8Str.empty()) return utf8Str;
+	// UTF-8 -> WideChar (Unicode)
+	int len = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), -1, NULL, 0);
+	if (len <= 0) return utf8Str;  // 转换失败，返回原
+	std::wstring wstr(len, 0);
+	MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), -1, &wstr[0], len);
+	// WideChar -> GBK (CP_ACP = 936 for Simplified Chinese GBK)
+	len = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+	if (len <= 0) return utf8Str;
+	std::string gbk(len, 0);
+	WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, &gbk[0], len, NULL, NULL);
+	return gbk.substr(0, len - 1);  // 移除 null 终止符
+}
 //加载函数
 void loadFile() {
 	std::ifstream ifs("accounts.txt");
 	if (!ifs.is_open()) {
-		std::cout << "文件打开失败!" << std::endl;
-		return;
+		std::cout << "文件不存在，将创建新文件。" << std::endl;  // 可选提示
+		return;  // 修复：不创建空文件，直接返回（注册会 save）
 	}
 	std::string line;
 	while (std::getline(ifs, line)) {
@@ -193,7 +248,7 @@ void loadFile() {
 		}
 		//解析历史记录
 		//去除空格
-		size_t start = hisStr.find_first_not_of(" \t");
+		size_t start =  hisStr.find_first_not_of(" \t");
 		if (start == std::string::npos) start = 0;
 		size_t end = hisStr.find_last_not_of(" \t");
 		if (start == std::string::npos) end = hisStr.size() - 1;
@@ -202,87 +257,81 @@ void loadFile() {
 			nlohmann::json j = nlohmann::json::parse(hisStr);
 			std::vector<std::string> hisVec = j;
 			for (const std::string& s : hisVec) {
-				std::cout << s <<"\n"<< std::endl;
-				acc->addHistory(s);
+				acc->history.push_back(UTF8ToGBK(s));
 			}
 		}catch(...){
 			std::cout << "无效历史记录!" << std::endl;
-			continue;
 		}
+		//存入全局账户映射
+		accountMap[id] = std::move(acc);
 	}
 	ifs.close();
+}
+
+// 辅助函数：GBK to UTF-8 转换
+std::string GBKToUTF8(const std::string& gbkStr) {
+	if (gbkStr.empty()) return gbkStr;
+	// GBK -> WideChar (Unicode)
+	int len = MultiByteToWideChar(CP_ACP, 0, gbkStr.c_str(), -1, NULL, 0);  // CP_ACP = GBK
+	std::wstring wstr(len, 0);
+	MultiByteToWideChar(CP_ACP, 0, gbkStr.c_str(), -1, &wstr[0], len);
+	// WideChar -> UTF-8
+	len = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+	std::string utf8(len, 0);
+	WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &utf8[0], len, NULL, NULL);
+	return utf8.substr(0, len - 1);  // 移除 null 终止符
 }
 
 //保存函数
-void saveFile(Account& acc) {
-	std::ifstream ifs("accounts.txt");
-	if (!ifs.is_open()) {
-		std::cout << "保存数据时文件打开失败" << std::endl;
+void saveFile() {
+	std::ofstream ofs("accounts.txt");
+	if (!ofs.is_open()) {
+		std::cout << "文件打开失败" << std::endl;
 		return;
 	}
-	//考虑用户已存在，更新用户信息
-	std::ofstream tempFile("temp.txt");
-	if (!tempFile.is_open()) {
-		std::cout << "临时文件创建失败" << std::endl;
-		return;
-	}
-	std::string data;
-	bool isfind = false;
-	while (std::getline(ifs, data)) {
-		std::string id;
-		std::string psw;
-		std::istringstream iss(data);
-		if (!std::getline(iss, id, '|')) {
-			std::cout<<"文件数据解析失败"<<std::endl;
-			return;
+	for (const auto& pair : accountMap) {
+		try {
+			// 修改：转换 history 每个 string 为 UTF-8
+			std::vector<std::string> utf8History;
+			for (const std::string& h : pair.second->getHistory()) {
+				utf8History.push_back(GBKToUTF8(h));  // 转换
+			}
+			nlohmann::json j = utf8History;  // 用转换后的 vector
+			std::string jsonStr = j.dump(-1);
+			ofs << pair.second->getId() << "|" << pair.second->getPsw() << "|"
+				<< std::to_string(pair.second->getBalance()) << "|" << pair.second->getType() << "|"
+				<< jsonStr << "\n";  // "\n" 加速
 		}
-		if (id == acc.getId()) {
-			//更新数据操作
-			nlohmann::json j = acc.getHistory();
-			std::string jsonStr = j.dump(4);
-			tempFile << acc.getId() << "|" << acc.getPsw() << "|" << std::to_string(acc.getBalance()) << "|" << acc.getType() << "|" << jsonStr << "\n" << std::endl;
-			isfind = true;
+		catch (const nlohmann::json::exception& e) {
+			std::cout << "JSON 序列化失败 for " << pair.first << ": " << e.what() << std::endl;
+			continue;
 		}
-		tempFile << data;
-	}
-	ifs.close();
-	tempFile.close();
-	if (std::remove("accounts.txt") != 0) {
-		std::cout << "删除原文件失败" << std::endl;
-		std::remove("temp.txt");
-		return;
-	}
-	if (std::rename("temp.txt", "accounts.txt") != 0) {
-		std::cout << "临时文件重命名失败" << std::endl;
-		std::remove("temp.txt");
-		return;
-	}
-	if (!isfind) {
-		std::ofstream ofs("accounts.txt", std::ios::app);
-		if (!ofs.is_open()) {
-			std::cout << "文件打开失败" << std::endl;
-			return;
+		catch (...) {
+			std::cout << "保存异常 for " << pair.first << std::endl;
+			break;
 		}
-		nlohmann::json j = acc.getHistory();
-		std::string jsonStr = j.dump(4);
-		ofs << acc.getId() << "|" << acc.getPsw() << "|" << std::to_string(acc.getBalance()) << "|" << acc.getType() << "|" << jsonStr << "\n" << std::endl;
-		
-		ofs.close();
 	}
+	ofs.flush();
+	ofs.close();
+	std::cout << "保存完成。" << std::endl;
 }
+//void saveFile() {
+//		std::ofstream ofs("accounts.txt");
+//		if (!ofs.is_open()) {
+//			std::cout << "文件打开失败" << std::endl;
+//			return;
+//		}
+//		for (const auto& pair : accountMap) {
+//			nlohmann::json j = pair.second->getHistory();
+//			std::string jsonStr = j.dump(0);
+//			ofs << pair.second->getId() << "|" << pair.second->getPsw() << "|" << std::to_string(pair.second->getBalance()) << "|" << pair.second->getType() << "|" << jsonStr << std::endl;
+//		}
+//		ofs.close();
+//}
 
-void Userlogin() {
-	//登录：用户输入ID和密码验证（最多3次尝试，失败退出）
-
-
-}
-void ATMSimulate(void) {
-	std::cout << "欢迎使用ATM模拟器！" << std::endl;
-
+std::string Userlogin() {
 	while (true) {
-		//登录
-		Userlogin();
-		std::cout << "菜单：1.存款 2.取款 3.查询余额 4.转账 5.交易历史 6.退出" << std::endl;
+		std::cout << "请选择：1.登录 2.注册" << std::endl;
 		std::string input;
 		int choice;
 		std::cin >> input;
@@ -293,29 +342,192 @@ void ATMSimulate(void) {
 			std::cout << "无效输入，请输入数字选项。" << std::endl;
 			continue;
 		}
-
+		std::string newId;
+		std::string newPsw;
+		std::string accType;
+		int Failure = 0;
 		switch (choice) {
-		case 1://存款
-			
+		case 1:
+			//登录：用户输入ID和密码验证（最多3次尝试，失败退出）
+			while (Failure < 3) {
+				std::string id;
+				std::string psw;
+				std::cout << "请输入账户ID：" << std::endl;
+				std::cin >> id;
+				std::cout << "请输入密码：" << std::endl;
+				std::cin >> psw;
+				auto it = accountMap.find(id);
+				if (it != accountMap.end() && it->second->getPsw() == psw) {
+					return id;
+				}
+				else {
+					std::cout << "ID或密码错误，请重试。" << std::endl;
+					Failure++;
+				}
+			}
+			std::cout << "登录失败次数过多，程序退出。" << std::endl;
+			exit(0);
+		case 2:
+			//注册
+			std::cout << "请输入新账户ID：" << std::endl;
+			std::cin >> newId;
+			if (accountMap.find(newId) != accountMap.end()) {
+				std::cout << "账户ID已存在，请选择其他ID。" << std::endl;
+				break;
+			}
+			std::cout << "请输入新账户密码：" << std::endl;
+			std::cin >> newPsw;
+			std::cout << "请选择账户类型：1.储蓄账户 2.支票账户" << std::endl;
+			std::cin >> accType;
+			if (accType == "1") {
+				accountMap[newId] = std::make_unique<SavingsAccount>(newId, newPsw);
+			}
+			else if (accType == "2") {
+				accountMap[newId] = std::make_unique<CheckingAccount>(newId, newPsw);
+			}
+			else {
+				std::cout << "请选择有效的账户类型！" << std::endl;
+				continue;
+			}
+			std::cout << "注册成功！" << std::endl;
+			return newId;
 			break;
-		case 2://取款
-
-			break;
-		case 3://查询余额
-
-			break;
-		case 4://转账
-
-			break;
-		case 5://交易历史
-
-			break;
-		case 6:
-			std::cout<< "谢谢使用，再见！" << std::endl;
-			return;
 		default:
 			std::cout << "无效选项，请重新选择。" << std::endl;
 			break;
+		}
+	}
+}
+void ATMSimulate(void) {
+	std::cout << "欢迎使用ATM模拟器！" << std::endl;
+	loadFile();
+	while (true) {
+		//登录
+		std::string id = Userlogin();
+		if (id.empty()) continue;
+		auto it = accountMap.find(id);
+		if (it == accountMap.end()) {
+			std::cout << "账户不存在，返回登录界面。" << std::endl;
+			continue;
+		}
+		Account* currentAccount = it->second.get();
+		//菜单
+		std::cout << "登录成功，欢迎 " << currentAccount->getId() << "！" << std::endl;
+		std::cout << "----------------------------------------------------------------------" << std::endl;
+
+		bool sessionActive = true; //内层循环控制变量
+		while (sessionActive) {
+			std::cout << "菜单：0.退出程序 1.存款 2.取款 3.查询余额 4.转账 5.交易历史 6.退出登录" << std::endl;
+			std::string input;
+			int choice;
+			std::cin >> input;
+			// 清空cin buffer（防输入残留）
+			std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+			try {
+				choice = std::stoi(input);
+			}
+			catch (...) {
+				std::cout << "无效输入，请输入数字选项。" << std::endl;
+				continue;
+			}
+			std::string AmountStr;
+			std::string targetId;
+			double amount;
+			bool opSuccess = false;
+
+			switch (choice) {
+			case 0:
+				std::cout << "谢谢使用，再见！" << std::endl;
+				saveFile();
+				exit(0);
+				break;
+			case 1://存款
+				std::cout << "请输入存款金额：" << std::endl;
+				std::cin >> AmountStr;
+				std::cin.ignore();
+				try {
+					amount = std::stod(AmountStr);
+					opSuccess = currentAccount->deposit(amount);
+					if (opSuccess) {
+						std::cout << "存款成功！当前余额：" << currentAccount->getBalance() << std::endl;
+					}
+					else {
+						std::cout << "取款失败，余额不足或无效金额！" << std::endl;
+					}
+				}
+				catch (const std::invalid_argument& e) {
+					std::cout << e.what() << std::endl;
+				}
+				catch (...) {
+					std::cout << "存款失败，未知错误！" << std::endl;
+				}
+				break;
+			case 2://取款
+				std::cout << "请输入取款金额：" << std::endl;
+				std::cin >> AmountStr;
+				std::cin.ignore();
+				try {
+					amount = std::stod(AmountStr);
+					opSuccess = currentAccount->withdraw(amount);
+					if (opSuccess) {
+						std::cout << "取款成功！当前余额：" << currentAccount->getBalance() << std::endl;
+					}
+					else {
+						std::cout << "取款失败，余额不足或无效金额！" << std::endl;
+					}
+				}
+				catch (const std::invalid_argument& e) {
+					std::cout << e.what() << std::endl;
+				}
+				catch (...) {
+					std::cout << "取款失败，未知错误！" << std::endl;
+				}
+				break;
+			case 3://查询余额
+				currentAccount->checkBalance();
+				break;
+			case 4://转账
+				std::cout << "输入目标账户ID：" << std::endl;
+				std::cin >> targetId;
+				std::cin.ignore();
+				std::cout << "输入转账金额：" << std::endl;
+				std::cin >> AmountStr;
+				std::cin.ignore();
+				try {
+					amount = std::stod(AmountStr);
+				}
+				catch(...){
+					std::cout << "无效金额输入！" << std::endl;
+					break;
+				}
+				opSuccess = currentAccount->transfer(targetId, amount);
+				if (opSuccess) {
+					std::cout << "转账成功！当前余额：" << currentAccount->getBalance() << std::endl;
+				}
+				else {
+					std::cout << "转账失败，余额不足或目标账户不存在！" << std::endl;
+				}
+				break;
+			case 5://交易历史
+				currentAccount->viewHistory();
+				break;
+			case 6:
+				try {
+					saveFile();
+					std::cout << "数据已保存，返回登录界面..." << std::endl;  // 修改：确认日志
+				}
+				catch (...) {
+					std::cout << "保存失败，但返回登录界面。" << std::endl;
+				}
+				sessionActive = false;
+				break;
+			default:
+				std::cout << "无效选项，请重新选择。" << std::endl;
+				break;
+			}
+			if (!opSuccess && (choice ==1 || choice ==2 || choice == 4)) {
+				std::cout << "操作未成功，请重试！" << std::endl;
+			}
 		}
 	}
 }
