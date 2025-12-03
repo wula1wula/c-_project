@@ -45,6 +45,12 @@
     <ClCompile Include="ATMSinulate.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="InventoryManagementSystem.h">
+      <Filter>头文件</Filter>
+    </ClCompile>
+    <ClCompile Include="InventoryManagementSystem.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SimpleCalculator.h">

@@ -7,6 +7,7 @@
 #include"ManagementSystem.h"
 #include"StudentSystem.h"
 #include"ATMSimulate.h"
+#include"InventoryManagementSystem.h"
 
 int main(void) {
 	//Rock_Paper_Scissors();	
@@ -15,7 +16,7 @@ int main(void) {
 	//ManagementSystem();
 	//studentSystem();
 	//ATMSimulate();
-      ATMSimulate();
-
+    //ATMSimulate();
+	InventoryManagementSystem();
     return 0;
 }
